@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "allowJs": true,
     "jsx": "preserve",
     "jsxImportSource": "@solidjs/web",
     "paths": {

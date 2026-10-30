@@ -10,7 +10,7 @@ const solid = await loadSolid2VitePlugin()
 
 export default defineConfig({
   root: solid2CompatRoot,
-  plugins: [solid2RuntimeResolver(), solid()],
+  plugins: [solid2RuntimeResolver(), solid({ solid: { hydratable: true } })],
   test: {
     dir: solid2SourceRoot,
     environment: 'jsdom',

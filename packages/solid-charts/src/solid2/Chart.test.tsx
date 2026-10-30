@@ -1,6 +1,8 @@
 /** @jsxImportSource @solidjs/web */
-import { render } from '@solidjs/web'
+import { resolve } from 'node:path'
+import { hydrate, render } from '@solidjs/web'
 import { createSignal, flush } from 'solid-js'
+import { createServer } from 'vite'
 import type { Element } from 'solid-js'
 import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { defineChart, lineY } from '@tanstack/charts'
@@ -9,6 +11,12 @@ import { tooltip } from '@tanstack/charts/tooltip'
 import { portal as tooltipPortal } from '@tanstack/charts/tooltip/portal'
 import { scaleLinear } from 'd3-scale'
 import { Chart } from './Chart'
+import {
+  loadSolid2VitePlugin,
+  solid2CompatRoot,
+  solid2RuntimeResolver,
+  solid2SourceRoot,
+} from '../../../../scripts/solid-2-compat.mjs'
 
 const rows = [
   { id: 'a', x: 0, y: 2 },
@@ -47,6 +55,81 @@ if (false) {
 }
 
 describe('Solid 2 adapter', () => {
+  it('hydrates server markup in place and cleans up after updates', async () => {
+    const solid = await loadSolid2VitePlugin()
+    const server = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      appType: 'custom',
+      root: solid2CompatRoot,
+      plugins: [solid2RuntimeResolver(), solid({ ssr: true })],
+      server: { middlewareMode: true },
+      ssr: { noExternal: ['@tanstack/charts', 'solid-js', '@solidjs/web'] },
+    })
+    const target = document.createElement('div')
+    document.body.append(target)
+    const globalHydration = Object.getOwnPropertyDescriptor(globalThis, '_$HY')
+    const windowHydration = Object.getOwnPropertyDescriptor(window, '_$HY')
+    try {
+      const { Chart: ServerChart } = await server.ssrLoadModule(
+        resolve(solid2SourceRoot, 'Chart.tsx'),
+      )
+      const { renderToString, generateHydrationScript } =
+        await server.ssrLoadModule('@solidjs/web')
+      const { createComponent } = await server.ssrLoadModule('solid-js')
+      target.innerHTML = renderToString(() =>
+        createComponent(ServerChart, {
+          definition,
+          width: 480,
+          height: 260,
+          ariaLabel: 'Revenue',
+        }),
+      )
+      const svg = target.querySelector('svg')
+      const line = target.querySelector('.ts-chart__line')
+      expect(svg).not.toBeNull()
+      expect(line).not.toBeNull()
+      const script = document.createElement('div')
+      script.innerHTML = generateHydrationScript({ eventNames: [] })
+      const bootstrap = script.querySelector('script')?.textContent
+      if (!bootstrap) throw new Error('Expected Solid hydration bootstrap')
+      new Function(bootstrap)()
+      let setLabel!: (label: string) => void
+      const dispose = hydrate(() => {
+        const [label, set] = createSignal('Revenue')
+        setLabel = set
+        return (
+          <Chart
+            definition={definition}
+            width={480}
+            height={260}
+            ariaLabel={label()}
+          />
+        )
+      }, target)
+      try {
+        expect(target.querySelector('svg')).toBe(svg)
+        expect(target.querySelector('.ts-chart__line')).toBe(line)
+        setLabel('Updated revenue')
+        flush()
+        expect(target.querySelector('svg')).toBe(svg)
+        expect(svg?.getAttribute('aria-label')).toBe('Updated revenue')
+      } finally {
+        dispose()
+      }
+      expect(target.childElementCount).toBe(0)
+    } finally {
+      target.remove()
+      // Solid 2 clears its hydration event queue through _$HY on the next
+      // delegated event, so a bootstrap-created _$HY stays for later tests.
+      if (globalHydration)
+        Object.defineProperty(globalThis, '_$HY', globalHydration)
+      if (windowHydration)
+        Object.defineProperty(window, '_$HY', windowHydration)
+      await server.close()
+    }
+  })
+
   it('mounts and cleans up the shared host', () => {
     const target = document.createElement('div')
     let setLabel!: (label: string) => void
